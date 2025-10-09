@@ -2,28 +2,42 @@ name: Validate JSON
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened]
     paths:
       - "tasks/**/*.json"
-      - "tasks/**/*.md"            # include if you want CI to run when .md changes
-      - "schemas/**/*.json"
-      - "scripts/**/*.cjs"
-      - "package.json"
-  push:
-    branches: [ main ]
-    paths:
-      - "tasks/**/*.json"
-      - "tasks/**/*.md"
       - "schemas/**/*.json"
       - "scripts/**/*.cjs"
       - "package.json"
 
 jobs:
-  validate:
+  validate_changed:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: List changed JSON files in this PR
+        id: diff
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request.number;
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner: context.repo.owner, repo: context.repo.repo, pull_number: pr }
+            );
+            const changed = files
+              .filter(f => ["added","modified","renamed"].includes(f.status))
+              .map(f => f.filename)
+              .filter(name => name.startsWith("tasks/") && name.endsWith(".json"));
+            core.setOutput("files", JSON.stringify(changed));
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+
       - run: npm ci || npm i
-      - run: node scripts/validate.cjs
+
+      - name: Validate changed files (strict)
+        env:
+          CHANGED_FILES: ${{ steps.diff.outputs.files }}
+        run: node scripts/validate.cjs
