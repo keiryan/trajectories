@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "validate": "node scripts/validate.js",
+    "validate": "node scripts/validate.cjs",
     "test": "npm run validate"
   },
   "devDependencies": {
