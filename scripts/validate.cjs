@@ -5,7 +5,7 @@ const Ajv = require("ajv").default;
 const addFormats = require("ajv-formats");
 
 const ROOT = process.cwd();
-const FORMS_DIR = path.join(ROOT, "forms");
+const FORMS_DIR = path.join(ROOT, "tasks");
 const SCHEMA_PATH = path.join(ROOT, "schemas", "messages.schema.json");
 
 function readJson(p) {
@@ -28,7 +28,7 @@ function* walkJsonFiles(dir) {
 
 function main() {
   if (!fs.existsSync(FORMS_DIR)) {
-    console.error("Missing forms/ directory");
+    console.error("Missing tasks/ directory");
     process.exit(1);
   }
   if (!fs.existsSync(SCHEMA_PATH)) {
