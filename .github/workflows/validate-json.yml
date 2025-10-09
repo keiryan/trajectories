@@ -24,4 +24,4 @@ jobs:
         with:
           node-version: "20"
       - run: npm ci || npm i
-      - run: node scripts/validate.js
+      - run: node scripts/validate.cjs
