@@ -3,14 +3,14 @@ name: Validate JSON
 on:
   pull_request:
     paths:
-      - "forms/**/*.json"
+      - "tasks/**/*.json"
       - "schemas/**/*.json"
       - "scripts/**/*.js"
       - "package.json"
   push:
     branches: [ main ]
     paths:
-      - "forms/**/*.json"
+      - "tasks/**/*.json"
       - "schemas/**/*.json"
       - "scripts/**/*.js"
       - "package.json"
