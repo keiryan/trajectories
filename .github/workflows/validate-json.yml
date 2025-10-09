@@ -4,15 +4,17 @@ on:
   pull_request:
     paths:
       - "tasks/**/*.json"
+      - "tasks/**/*.md"            # include if you want CI to run when .md changes
       - "schemas/**/*.json"
-      - "scripts/**/*.js"
+      - "scripts/**/*.cjs"
       - "package.json"
   push:
     branches: [ main ]
     paths:
       - "tasks/**/*.json"
+      - "tasks/**/*.md"
       - "schemas/**/*.json"
-      - "scripts/**/*.js"
+      - "scripts/**/*.cjs"
       - "package.json"
 
 jobs:
