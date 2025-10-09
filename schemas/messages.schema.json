@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Message File",
+  "oneOf": [
+    {
+      "type": "array",
+      "items": { "$ref": "#/$defs/Message" },
+      "minItems": 1,
+      "additionalItems": true
+    },
+    {
+      "type": "object",
+      "required": ["messages"],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/Message" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": true
+    }
+  ],
+  "$defs": {
+    "Message": {
+      "type": "object",
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "assistant", "system", "tool"] },
+        "content": { "type": "string", "minLength": 1 },
+        "contentClassification": { "type": "string" },
+        "classificationExplanation": { "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "contentClassification": { "type": "string", "minLength": 1 } },
+            "required": ["contentClassification"]
+          },
+          "then": {
+            "required": ["classificationExplanation"],
+            "properties": { "classificationExplanation": { "minLength": 1 } }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}
