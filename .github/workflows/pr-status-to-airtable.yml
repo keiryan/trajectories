@@ -55,7 +55,7 @@ jobs:
 
       - name: POST to Airtable webhook
         env:
-          AIRTABLE_WEBHOOK_URL: ${{ secrets.AIRTABLE_WEBHOOK_URL }}
+          AIRTABLE_WEBHOOK_URL: "https://hooks.airtable.com/workflows/v1/genericWebhook/app8layDpsoR8AYD9/wflEF8q9AVWfuLnEK/wtrHu3lWAEqe2c5vi"
         run: |
           curl -s -X POST "$AIRTABLE_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
