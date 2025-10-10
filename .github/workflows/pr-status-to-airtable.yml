@@ -1,4 +1,3 @@
-# .github/workflows/pr-status-to-airtable.yml
 name: PR status to Airtable
 
 on:
@@ -8,8 +7,8 @@ on:
 
 jobs:
   push_to_airtable:
-    # Optional: only for PR-originated runs
-    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    # only for PR or push triggered runs (ignore workflow_dispatch etc.)
+    if: ${{ github.event.workflow_run.event == 'pull_request' || github.event.workflow_run.event == 'push' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -17,26 +16,67 @@ jobs:
       pull-requests: read
 
     steps:
-      - name: Show workflow_run summary
+      - name: Save event
         run: |
           echo '${{ toJson(github.event) }}' > wr.json
-          jq -r '.workflow_run.name, .workflow_run.conclusion, .workflow_run.head_sha, .workflow_run.head_branch' wr.json
+          echo "workflow_run name: $(jq -r '.workflow_run.name' wr.json)"
+          echo "conclusion: $(jq -r '.workflow_run.conclusion' wr.json)"
+          echo "head_sha: $(jq -r '.workflow_run.head_sha' wr.json)"
+          echo "head_branch: $(jq -r '.workflow_run.head_branch' wr.json)"
 
-      - name: Fetch PRs associated with the commit
+      - name: Resolve PR reliably (forks too)
+        id: resolve_pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+
           OWNER_REPO="${{ github.repository }}"
           OWNER="${OWNER_REPO%%/*}"
           REPO="${OWNER_REPO#*/}"
-          SHA=$(jq -r '.workflow_run.head_sha' wr.json)
 
-          curl -s -H "Authorization: Bearer $GH_TOKEN" \
-            "https://api.github.com/repos/$OWNER/$REPO/commits/$SHA/pulls" > prs.json
-          PR_URL=$(jq -r '.[0].url // empty' prs.json || true)
+          # 1) direct PR link from workflow_run payload
+          PR_URL=$(jq -r '.workflow_run.pull_requests[0].url // empty' wr.json)
+
+          # 2) if missing, try head owner:branch
+          if [ -z "$PR_URL" ]; then
+            echo "No PR in workflow_run.pull_requests[]. Trying head owner:branch..."
+            HEAD_BRANCH=$(jq -r '.workflow_run.head_branch' wr.json)
+            HEAD_FULL=$(jq -r '.workflow_run.head_repository.full_name // empty' wr.json)
+            if [ -n "$HEAD_FULL" ] && [ -n "$HEAD_BRANCH" ]; then
+              PRS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+                "https://api.github.com/repos/$OWNER/$REPO/pulls?state=all&head=${HEAD_FULL}:${HEAD_BRANCH}")
+              echo "$PRS" > prs_by_head.json
+              PR_URL=$(jq -r '.[0].url // empty' prs_by_head.json)
+            fi
+          fi
+
+          # 3) if still missing, try commit to pulls
+          if [ -z "$PR_URL" ]; then
+            echo "No PR via head owner:branch. Trying commit→pulls..."
+            SHA=$(jq -r '.workflow_run.head_sha' wr.json)
+            PRS=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$OWNER/$REPO/commits/$SHA/pulls")
+            echo "$PRS" > prs_by_sha.json
+            PR_URL=$(jq -r '.[0].url // empty' prs_by_sha.json)
+          fi
 
           if [ -n "$PR_URL" ]; then
+            echo "Found PR: $PR_URL"
             curl -s -H "Authorization: Bearer $GH_TOKEN" "$PR_URL" > pr.json
+            echo "pr_number=$(jq -r '.number' pr.json)" >> $GITHUB_OUTPUT
+            echo "pr_html_url=$(jq -r '.html_url' pr.json)" >> $GITHUB_OUTPUT
+            echo "author_login=$(jq -r '.user.login' pr.json)" >> $GITHUB_OUTPUT
+          else
+            echo "No PR found. Falling back to commit author login if available."
+            SHA=$(jq -r '.workflow_run.head_sha' wr.json)
+            COMMIT=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$OWNER/$REPO/commits/$SHA")
+            echo "$COMMIT" > commit.json
+            ALT_LOGIN=$(jq -r '.author.login // empty' commit.json)
+            echo "pr_number=" >> $GITHUB_OUTPUT
+            echo "pr_html_url=" >> $GITHUB_OUTPUT
+            echo "author_login=$ALT_LOGIN" >> $GITHUB_OUTPUT
           fi
 
       - name: Build payload
@@ -45,29 +85,27 @@ jobs:
           SHA=$(jq -r '.workflow_run.head_sha' wr.json)
           BRANCH=$(jq -r '.workflow_run.head_branch' wr.json)
           CONCLUSION=$(jq -r '.workflow_run.conclusion' wr.json)
-          CHECK_URL=$(jq -r '.workflow_run.html_url' wr.json)
+          RUN_URL=$(jq -r '.workflow_run.html_url' wr.json)
           TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          if [ -f pr.json ]; then
-            PR_NUMBER=$(jq -r '.number' pr.json)
-            PR_LINK=$(jq -r '.html_url' pr.json)
-            AUTHOR=$(jq -r '.user.login' pr.json)
-          else
-            PR_NUMBER=null
-            PR_LINK=""
-            AUTHOR=""
-          fi
+          PR_NUMBER='${{ steps.resolve_pr.outputs.pr_number }}'
+          PR_LINK='${{ steps.resolve_pr.outputs.pr_html_url }}'
+          AUTHOR='${{ steps.resolve_pr.outputs.author_login }}'
+
+          [ -z "$PR_NUMBER" ] && PR_NUMBER=null
+          [ -z "$PR_LINK" ] && PR_LINK=""
+          [ -z "$AUTHOR" ] && AUTHOR=""
 
           jq -n \
             --arg repo "$REPO" \
             --arg head_sha "$SHA" \
             --arg head_branch "$BRANCH" \
             --arg conclusion "$CONCLUSION" \
-            --arg check_url "$CHECK_URL" \
+            --arg check_url "$RUN_URL" \
             --arg timestamp "$TS" \
             --arg pr_url "$PR_LINK" \
             --arg author_login "$AUTHOR" \
-            --argjson pr_number "${PR_NUMBER:-null}" \
+            --argjson pr_number "$PR_NUMBER" \
             '{
               repo: $repo,
               pr_number: $pr_number,
@@ -80,12 +118,22 @@ jobs:
               timestamp: $timestamp
             }' > minimal.json
 
+          echo "Payload to Airtable:"
           cat minimal.json | jq .
 
       - name: POST to Airtable webhook
         env:
           AIRTABLE_WEBHOOK_URL: ${{ secrets.AIRTABLE_WEBHOOK_URL }}
         run: |
-          curl -sS -X POST "$AIRTABLE_WEBHOOK_URL" \
+          set -e
+          CODE=$(curl -sS -X POST "$AIRTABLE_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            --data @minimal.json -w "\nHTTP %{http_code}\n"
+            --data @minimal.json \
+            -o /tmp/resp.txt -w "%{http_code}")
+          echo "HTTP $CODE"
+          echo "Body:"
+          cat /tmp/resp.txt
+          if [ "$CODE" -lt 200 ] || [ "$CODE" -ge 300 ]; then
+            echo "Non 2xx from Airtable. Failing."
+            exit 1
+          fi
