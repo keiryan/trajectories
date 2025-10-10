@@ -52,20 +52,35 @@ function depthCheck(jsonPath) {
 
 function strictNonEmptyCheck(data, filePath) {
   const where = rel(filePath);
+
   if (!data || !Array.isArray(data.messages)) {
     throw new Error(`${where}: root must have "messages" array`);
   }
+
   const errors = [];
+  let checkedCount = 0;
+
   data.messages.forEach((m, i) => {
-    const cc = m && typeof m.contentClassification === "string" ? m.contentClassification.trim() : "";
-    const ce = m && typeof m.classificationExplanation === "string" ? m.classificationExplanation.trim() : "";
+    // Exempt any system messages from annotation requirements
+    if (m && m.role === "system") return;
+
+    checkedCount++;
+
+    const cc = typeof m?.contentClassification === "string" ? m.contentClassification.trim() : "";
+    const ce = typeof m?.classificationExplanation === "string" ? m.classificationExplanation.trim() : "";
+
     if (!cc) errors.push(`messages[${i}].contentClassification is empty`);
     if (!ce) errors.push(`messages[${i}].classificationExplanation is empty`);
   });
+
+  // Optional: if you want at least one non-system message to be annotated, uncomment below
+  // if (checkedCount === 0) errors.push("no non-system messages to check");
+
   if (errors.length) {
     throw new Error(`${where}: strict checks failed - ${errors.join("; ")}`);
   }
 }
+
 
 function main() {
   if (!fs.existsSync(SCHEMA_PATH)) {
