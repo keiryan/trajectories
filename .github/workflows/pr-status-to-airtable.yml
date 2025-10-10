@@ -1,0 +1,62 @@
+# .github/workflows/pr-status-to-airtable.yml
+name: PR status to Airtable
+
+on:
+  check_run:
+    types: [completed]
+
+jobs:
+  push_to_airtable:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      pull-requests: read
+      contents: read
+    steps:
+      - name: Save event
+        run: |
+          echo '${{ toJson(github.event) }}' > event.json
+
+      - name: Build minimal JSON
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # pull request URL from the check_run payload
+          PR_API_URL=$(jq -r '.check_run.check_suite.pull_requests[0].url // .check_run.pull_requests[0].url' event.json)
+
+          # fetch PR data to get author, title, html_url
+          curl -s -H "authorization: Bearer $GH_TOKEN" "$PR_API_URL" > pr.json
+
+          jq -n \
+            --arg repo         "${{ github.repository }}" \
+            --arg pr_num       "$(jq -r '.number' pr.json)" \
+            --arg pr_url       "$(jq -r '.html_url' pr.json)" \
+            --arg author_login "$(jq -r '.user.login' pr.json)" \
+            --arg head_sha     "$(jq -r '.check_run.check_suite.head_sha // .check_run.check_suite.headsha' event.json)" \
+            --arg check_name   "$(jq -r '.check_run.name' event.json)" \
+            --arg status       "$(jq -r '.check_run.status' event.json)" \
+            --arg conclusion   "$(jq -r '.check_run.conclusion // "neutral"' event.json)" \
+            --arg check_url    "$(jq -r '.check_run.html_url // .check_run.htmlurl' event.json)" \
+            --arg timestamp    "$(jq -r '.check_run.started_at // .check_run.startedat' event.json)" \
+            --arg sender_login "$(jq -r '.sender.login' event.json)" \
+            '{
+              repo: $repo,
+              pr_number: ($pr_num|tonumber),
+              pr_url: $pr_url,
+              author_login: $author_login,
+              head_sha: $head_sha,
+              check_name: $check_name,
+              status: $status,
+              conclusion: $conclusion,
+              check_url: $check_url,
+              timestamp: $timestamp,
+              sender_login: $sender_login
+            }' > minimal.json
+
+      - name: POST to Airtable webhook
+        env:
+          AIRTABLE_WEBHOOK_URL: ${{ secrets.AIRTABLE_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST "$AIRTABLE_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data @minimal.json
