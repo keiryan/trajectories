@@ -2,61 +2,90 @@
 name: PR status to Airtable
 
 on:
-  check_run:
+  workflow_run:
+    workflows: ["Validate JSON"]  # must match the name: in validate-json.yml
     types: [completed]
 
 jobs:
   push_to_airtable:
+    # Optional: only for PR-originated runs
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
-      checks: read
-      pull-requests: read
+      actions: read
       contents: read
-    steps:
-      - name: Save event
-        run: |
-          echo '${{ toJson(github.event) }}' > event.json
+      pull-requests: read
 
-      - name: Build minimal JSON
+    steps:
+      - name: Show workflow_run summary
+        run: |
+          echo '${{ toJson(github.event) }}' > wr.json
+          jq -r '.workflow_run.name, .workflow_run.conclusion, .workflow_run.head_sha, .workflow_run.head_branch' wr.json
+
+      - name: Fetch PRs associated with the commit
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # pull request URL from the check_run payload
-          PR_API_URL=$(jq -r '.check_run.check_suite.pull_requests[0].url // .check_run.pull_requests[0].url' event.json)
+          OWNER_REPO="${{ github.repository }}"
+          OWNER="${OWNER_REPO%%/*}"
+          REPO="${OWNER_REPO#*/}"
+          SHA=$(jq -r '.workflow_run.head_sha' wr.json)
 
-          # fetch PR data to get author, title, html_url
-          curl -s -H "authorization: Bearer $GH_TOKEN" "$PR_API_URL" > pr.json
+          curl -s -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$OWNER/$REPO/commits/$SHA/pulls" > prs.json
+          PR_URL=$(jq -r '.[0].url // empty' prs.json || true)
+
+          if [ -n "$PR_URL" ]; then
+            curl -s -H "Authorization: Bearer $GH_TOKEN" "$PR_URL" > pr.json
+          fi
+
+      - name: Build payload
+        run: |
+          REPO="${{ github.repository }}"
+          SHA=$(jq -r '.workflow_run.head_sha' wr.json)
+          BRANCH=$(jq -r '.workflow_run.head_branch' wr.json)
+          CONCLUSION=$(jq -r '.workflow_run.conclusion' wr.json)
+          CHECK_URL=$(jq -r '.workflow_run.html_url' wr.json)
+          TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          if [ -f pr.json ]; then
+            PR_NUMBER=$(jq -r '.number' pr.json)
+            PR_LINK=$(jq -r '.html_url' pr.json)
+            AUTHOR=$(jq -r '.user.login' pr.json)
+          else
+            PR_NUMBER=null
+            PR_LINK=""
+            AUTHOR=""
+          fi
 
           jq -n \
-            --arg repo         "${{ github.repository }}" \
-            --arg pr_num       "$(jq -r '.number' pr.json)" \
-            --arg pr_url       "$(jq -r '.html_url' pr.json)" \
-            --arg author_login "$(jq -r '.user.login' pr.json)" \
-            --arg head_sha     "$(jq -r '.check_run.check_suite.head_sha // .check_run.check_suite.headsha' event.json)" \
-            --arg check_name   "$(jq -r '.check_run.name' event.json)" \
-            --arg status       "$(jq -r '.check_run.status' event.json)" \
-            --arg conclusion   "$(jq -r '.check_run.conclusion // "neutral"' event.json)" \
-            --arg check_url    "$(jq -r '.check_run.html_url // .check_run.htmlurl' event.json)" \
-            --arg timestamp    "$(jq -r '.check_run.started_at // .check_run.startedat' event.json)" \
-            --arg sender_login "$(jq -r '.sender.login' event.json)" \
+            --arg repo "$REPO" \
+            --arg head_sha "$SHA" \
+            --arg head_branch "$BRANCH" \
+            --arg conclusion "$CONCLUSION" \
+            --arg check_url "$CHECK_URL" \
+            --arg timestamp "$TS" \
+            --arg pr_url "$PR_LINK" \
+            --arg author_login "$AUTHOR" \
+            --argjson pr_number "${PR_NUMBER:-null}" \
             '{
               repo: $repo,
-              pr_number: ($pr_num|tonumber),
+              pr_number: $pr_number,
               pr_url: $pr_url,
               author_login: $author_login,
               head_sha: $head_sha,
-              check_name: $check_name,
-              status: $status,
+              head_branch: $head_branch,
               conclusion: $conclusion,
               check_url: $check_url,
-              timestamp: $timestamp,
-              sender_login: $sender_login
+              timestamp: $timestamp
             }' > minimal.json
+
+          cat minimal.json | jq .
 
       - name: POST to Airtable webhook
         env:
-          AIRTABLE_WEBHOOK_URL: "https://hooks.airtable.com/workflows/v1/genericWebhook/app8layDpsoR8AYD9/wflEF8q9AVWfuLnEK/wtrHu3lWAEqe2c5vi"
+          AIRTABLE_WEBHOOK_URL: ${{ secrets.AIRTABLE_WEBHOOK_URL }}
         run: |
-          curl -s -X POST "$AIRTABLE_WEBHOOK_URL" \
+          curl -sS -X POST "$AIRTABLE_WEBHOOK_URL" \
             -H "Content-Type: application/json" \
-            --data @minimal.json
+            --data @minimal.json -w "\nHTTP %{http_code}\n"
