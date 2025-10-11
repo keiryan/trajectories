@@ -1,0 +1,54 @@
+# .github/workflows/on-fork-to-airtable.yml
+name: Fork event to Airtable
+
+on:
+  fork:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Save event and build payload
+        run: |
+          echo '${{ toJson(github.event) }}' > event.json
+
+          # Minimal payload for Airtable
+          jq -n \
+            --arg repo        "${{ github.repository }}" \
+            --arg forked_full "$(jq -r '.forkee.full_name' event.json)" \
+            --arg forked_id   "$(jq -r '.forkee.id' event.json)" \
+            --arg forked_html "$(jq -r '.forkee.html_url' event.json)" \
+            --arg private     "$(jq -r '.forkee.private' event.json)" \
+            --arg default_br  "$(jq -r '.forkee.default_branch' event.json)" \
+            --arg sender      "$(jq -r '.sender.login' event.json)" \
+            --arg sender_id   "$(jq -r '.sender.id' event.json)" \
+            --arg ts          "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" \
+            '{
+              source_repo: $repo,
+              forked_repo_full_name: $forked_full,
+              forked_repo_id: ($forked_id|tonumber),
+              forked_repo_html_url: $forked_html,
+              forked_repo_private: ($private=="true"),
+              forked_repo_default_branch: $default_br,
+              sender_login: $sender,
+              sender_id: ($sender_id|tonumber),
+              timestamp: $ts
+            }' > minimal.json
+
+          echo "Will send:"
+          cat minimal.json | jq .
+
+      - name: POST to Airtable webhook
+        env:
+          AIRTABLE_WEBHOOK_URL: ${{ secrets.AIRTABLE_FORK_WEBHOOK_URL }}
+        run: |
+          set -e
+          CODE=$(curl -sS -X POST "$AIRTABLE_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            --data @minimal.json \
+            -o /tmp/resp.txt -w "%{http_code}")
+          echo "HTTP $CODE"
+          cat /tmp/resp.txt
+          test "$CODE" -ge 200 -a "$CODE" -lt 300
